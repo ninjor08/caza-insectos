@@ -1,98 +1,193 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import React, { useEffect, useMemo, useState } from "react";
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { db } from "../../firebaseConfig";
+
+type Bug = {
+  id: string;
+  x: number; // porcentaje 0-100
+  y: number; // porcentaje 0-100
+};
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const GAME_SECONDS = 20;
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  const [timeLeft, setTimeLeft] = useState(GAME_SECONDS);
+  const [score, setScore] = useState(0);
+  const [gameOver, setGameOver] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [bugs, setBugs] = useState<Bug[]>(() => createBugs(8));
+
+  const title = useMemo(() => "🪲🪲  Caza Insectos  🪲🪲", []);
+
+  useEffect(() => {
+    if (gameOver) return;
+
+    const interval = setInterval(() => {
+      setTimeLeft((t) => {
+        if (t <= 1) {
+          clearInterval(interval);
+          setGameOver(true);
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameOver]);
+
+  // Cuando termina el juego: guarda puntaje una vez
+  useEffect(() => {
+    if (!gameOver) return;
+
+    (async () => {
+      try {
+        setSaving(true);
+        await addDoc(collection(db, "puntajes"), {
+          score,
+          createdAt: serverTimestamp(),
+        });
+        
+      } catch (e) {
+        console.log("Error guardando puntaje:", e);
+        Alert.alert("Error", "No se pudo guardar el puntaje en Firebase");
+      } finally {
+        setSaving(false);
+      }
+    })();
+  }, [gameOver, score]);
+
+  const onHitBug = (id: string) => {
+    if (gameOver) return;
+
+    setBugs((prev) => prev.filter((b) => b.id !== id));
+    setScore((s) => s + 10);
+
+    // Reponer un insecto nuevo para que siga el juego
+    setBugs((prev) => [...prev, createOneBug()]);
+  };
+
+  const resetGame = () => {
+    setTimeLeft(GAME_SECONDS);
+    setScore(0);
+    setGameOver(false);
+    setSaving(false);
+    setBugs(createBugs(8));
+  };
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>{title}</Text>
+
+      {!gameOver ? (
+        <>
+          <View style={styles.infoRow}>
+            <Text style={styles.info}>⏱ Tiempo: {timeLeft}s</Text>
+            <Text style={styles.info}>⭐ Puntaje: {score}</Text>
+          </View>
+
+          <View style={styles.gameArea}>
+            {bugs.map((bug) => (
+              <TouchableOpacity
+                key={bug.id}
+                onPress={() => onHitBug(bug.id)}
+                style={[
+                  styles.bug,
+                  {
+                    left: `${bug.x}%`,
+                    top: `${bug.y}%`,
+                  },
+                ]}
+              >
+                <Text style={styles.bugText}>🐞</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.hint}>Toca los insectos para sumar puntos</Text>
+        </>
+      ) : (
+        <>
+          <Text style={styles.gameOver}>Juego terminado</Text>
+          <Text style={styles.finalScore}>Puntaje final: {score}</Text>
+
+          <Text style={styles.saving}>
+            {saving ? "Guardando puntaje en Firebase..." : "Puntaje guardado en Firebase"}
+          </Text>
+
+          <TouchableOpacity style={styles.button} onPress={resetGame}>
+            <Text style={styles.buttonText}>Jugar de nuevo</Text>
+          </TouchableOpacity>
+        </>
+      )}
+    </View>
   );
 }
 
+function createBugs(n: number): Bug[] {
+  return Array.from({ length: n }).map(() => createOneBug());
+}
+
+function createOneBug(): Bug {
+  
+  const x = rand(5, 85);
+  const y = rand(5, 75);
+
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    x,
+    y,
+  };
+}
+
+function rand(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: { flex: 1, padding: 16, backgroundColor: "#fff" },
+  title: { fontSize: 28, fontWeight: "800", textAlign: "center", marginTop: 10 },
+  infoRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 18,
+    paddingHorizontal: 8,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  info: { fontSize: 16, fontWeight: "700" },
+  gameArea: {
+    flex: 1,
+    marginTop: 14,
+    borderWidth: 2,
+    borderColor: "#ddd",
+    borderRadius: 16,
+    position: "relative",
+    overflow: "hidden",
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  bug: {
+    position: "absolute",
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    justifyContent: "center",
+    alignItems: "center",
   },
+  bugText: { fontSize: 28 },
+  hint: { textAlign: "center", marginBottom: 12, color: "#444" },
+  gameOver: { textAlign: "center", marginTop: 30, fontSize: 22, color: "red", fontWeight: "800" },
+  finalScore: { textAlign: "center", marginTop: 10, fontSize: 18, fontWeight: "700" },
+  saving: { textAlign: "center", marginTop: 10, color: "#333" },
+  button: {
+    marginTop: 18,
+    backgroundColor: "#111",
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    alignSelf: "center",
+    width: 180,
+  },
+  buttonText: { color: "#fff", fontWeight: "800" },
 });
+
